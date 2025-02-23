@@ -1,0 +1,14 @@
+digraph "Sequence Diagram" {
+	Producer [label=Producer shape=ellipse]
+	Kafka [label="Kafka Bus" shape=rectangle]
+	Consumer [label=Consumer shape=ellipse]
+	MasterDB [label="Master InfluxDB" shape=cylinder]
+	StandbyDB [label="Standby InfluxDB" shape=cylinder]
+	DataExplorer [label="Data Explorer" shape=ellipse]
+	Producer -> Kafka [label="Sends data to Kafka Bus"]
+	Kafka -> Consumer [label="Forwards data to Consumer"]
+	Consumer -> MasterDB [label="Writes data"]
+	Consumer -> StandbyDB [label="Writes data (standby)"]
+	DataExplorer -> MasterDB [label="Fetches data for visualization (if available)"]
+	DataExplorer -> StandbyDB [label="Fetches data during Master failover"]
+}

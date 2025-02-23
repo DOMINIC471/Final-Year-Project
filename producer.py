@@ -1,26 +1,68 @@
 from confluent_kafka import Producer
-import random
+import pandas as pd
 import time
+import json
 
+# Delivery report callback
 def delivery_report(err, msg):
-    """ Called once for each message produced to indicate delivery result.
-        Triggered by poll() or flush(). """
+    """Called once for each message produced to indicate delivery result."""
     if err is not None:
         print(f"Message delivery failed: {err}")
     else:
         print(f"Message delivered to {msg.topic()} [{msg.partition()}]")
 
+# Kafka Producer configuration
 p = Producer({'bootstrap.servers': 'localhost:9092'})
 
-# Simulate sending messages from different services
-for i in range(10):  # Producing 10 messages
-    service_name = f'service-{i}'
-    sensor_value = round(random.uniform(20.0, 30.0), 2)  # Simulate random sensor values between 20 and 30
-    message_value = f'Message from {service_name}, Sensor value: {sensor_value}'
+# Path to the cleaned CSV file
+csv_file = "Data/extracted_hr_data.csv"  # Replace with the correct path
 
-    p.produce('test-topic', key=service_name, value=message_value, callback=delivery_report)
+# Load the cleaned CSV file
+try:
+    data = pd.read_csv(csv_file)
+except Exception as e:
+    print(f"Error reading CSV file: {e}")
+    exit(1)
+
+# Debug: Print row count and sample data
+print(f"Total rows in dataset: {len(data)}")
+print(data.head())
+
+# Kafka Topic
+TOPIC = "heart_rate"
+
+# Batch size and interval
+batch_size = 10  # Number of records per batch
+interval = 60  # Delay in seconds between batches
+
+# Start producing
+print("Starting Producer...")
+for i in range(0, len(data), batch_size):
+    batch = data.iloc[i:i + batch_size]
+    print(f"Processing batch {i // batch_size + 1}, Rows: {len(batch)}")
+
+    # Process each record in the batch
+    for _, row in batch.iterrows():
+        # Prepare the message and ensure proper conversion to native types
+        sensor_data = {
+            "bed_number": str(row["Bed Number"]),  # Convert to string
+            "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),  # Generate current timestamp
+            "heart_rate": int(row["Heart Rate"])  # Convert to native int
+        }
+
+        # Produce data to Kafka
+        try:
+            p.produce(TOPIC, key=sensor_data["bed_number"], value=json.dumps(sensor_data), callback=delivery_report)
+            print(f"Produced: {sensor_data}")
+        except Exception as e:
+            print(f"Error producing message: {e}")
+
+    # Flush after each batch to ensure all messages are delivered
     p.flush()
-    time.sleep(1)  # Simulate delay between messages
+    print(f"Batch {i // batch_size + 1} sent. Waiting for {interval} seconds...")
 
-# Wait for any outstanding messages to be delivered and delivery reports received
-p.flush()
+    # Wait before sending the next batch unless it's the last one
+    if i + batch_size < len(data):
+        time.sleep(interval)
+
+print("All data sent!")

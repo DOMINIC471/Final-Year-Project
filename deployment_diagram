@@ -1,0 +1,23 @@
+digraph DeploymentDiagram {
+	rankdir=TB
+	Producer [label="Producer Script
+(Runs Locally)"]
+	Consumer [label="Consumer Script
+(Runs Locally)"]
+	Kafka [label="Kafka Bus
+(Docker Container)"]
+	MasterDB [label="InfluxDB Master
+(Docker Container
+Port: 8086)"]
+	StandbyDB [label="InfluxDB Standby
+(Docker Container
+Port: 8087)"]
+	DataExplorer [label="Data Explorer (UI)
+(InfluxDB Web UI)"]
+	Producer -> Kafka [label="Sends sensor data"]
+	Kafka -> Consumer [label="Delivers messages"]
+	Consumer -> MasterDB [label="Writes data to Master"]
+	Consumer -> StandbyDB [label="Writes data to Standby"]
+	MasterDB -> DataExplorer [label="Queries and visualizes data"]
+	StandbyDB -> DataExplorer [label="Queries and visualizes data (Failover)"]
+}

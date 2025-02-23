@@ -1,0 +1,18 @@
+digraph StateDiagram {
+	rankdir=LR size=10
+	MasterAvailable [label="Master DB Available" shape=ellipse]
+	MasterDown [label="Master DB Down" shape=ellipse]
+	FailoverToStandby [label="Failover to Standby DB" shape=ellipse]
+	RecoverMaster [label="Recover Master DB" shape=ellipse]
+	ConsumerRunning [label="Consumer Running" shape=ellipse]
+	ConsumerWritesToBoth [label="Writing to Both DBs" shape=ellipse]
+	ConsumerWritesToStandby [label="Writing to Standby Only" shape=ellipse]
+	MasterAvailable -> MasterDown [label="Master Fails"]
+	MasterDown -> RecoverMaster [label="Master Recovered"]
+	RecoverMaster -> MasterAvailable [label="Back Online"]
+	ConsumerRunning -> ConsumerWritesToBoth [label="Master & Standby Available"]
+	ConsumerRunning -> ConsumerWritesToStandby [label="Master Down Detected"]
+	ConsumerWritesToStandby -> ConsumerWritesToBoth [label="Master Back Online"]
+	MasterDown -> ConsumerWritesToStandby [label="Failover Triggered"]
+	RecoverMaster -> ConsumerWritesToBoth [label="Consumer Syncs with Master"]
+}

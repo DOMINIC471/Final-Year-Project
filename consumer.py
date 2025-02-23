@@ -1,58 +1,56 @@
-from confluent_kafka import Consumer, Producer
+from confluent_kafka import Consumer
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
+import psycopg2
 from datetime import datetime
-import pytz
-import time
+import json
 
-# InfluxDB setup
+# InfluxDB Master Setup
 bucket = "sensor_data"
 org = "FYP"
-token = "MkgL8fi5idXV7ZGnIR6ua-8IxKnbcq6vT49v1hvD7S5Ee-fSphEUc5PxM5pkFnjH23eOLno6GDBoE5gfOJ2RUg=="  
-token_standby = "eYWtsn2BR84E2Iv5gy6FJ6phpQZWQ57I3z9EAnv16nAzdJwd-psplEgYa5kx6rjyEwX838xuuF-FFkUDzdZwrA=="
+token_master = "your_master_token"
 url_master = "http://localhost:8086"
-url_standby = "http://localhost:8087"
 
-# Connect to InfluxDB (Master and Standby)
-client_master = InfluxDBClient(url=url_master, token=token, org=org)
-client_standby = InfluxDBClient(url=url_standby, token=token_standby, org=org)
-
+client_master = InfluxDBClient(url=url_master, token=token_master, org=org)
 write_api_master = client_master.write_api(write_options=SYNCHRONOUS)
-write_api_standby = client_standby.write_api(write_options=SYNCHRONOUS)
 
-# Kafka Consumer setup
-consumer = Consumer({
+# TimescaleDB Master Setup
+timescale_conn_master = psycopg2.connect(
+    dbname="sensor_data",
+    user="postgres",
+    password="new_password",  # Replace with your TimescaleDB password
+    host="localhost",
+    port=5432
+)
+timescale_cursor_master = timescale_conn_master.cursor()
+
+# Kafka Consumer Setup
+consumer_master = Consumer({
     'bootstrap.servers': 'localhost:9092',
-    'group.id': 'mygroup',
+    'group.id': 'master-group',
     'auto.offset.reset': 'earliest'
 })
 
-consumer.subscribe(['test-topic', 'temperature-topic', 'humidity-topic', 'pressure-topic'])
+consumer_master.subscribe(["heart_rate"])
 
-# Kafka Producer setup (to send heartbeats)
-producer = Producer({
-    'bootstrap.servers': 'localhost:9092'
-})
+# Function to Write to TimescaleDB Master
+def write_to_timescale_master(bed_number, timestamp, heart_rate):
+    try:
+        query = """
+        INSERT INTO sensor_data (time, bed_number, heart_rate)
+        VALUES (%s, %s, %s)
+        """
+        timescale_cursor_master.execute(query, (datetime.fromisoformat(timestamp), bed_number, heart_rate))
+        timescale_conn_master.commit()
+        print(f"Data written to TimescaleDB Master: {bed_number}, {timestamp}, {heart_rate}")
+    except Exception as e:
+        timescale_conn_master.rollback()
+        print(f"Failed to write to TimescaleDB Master: {e}")
 
-# Heartbeat function to send status to Kafka
-def send_heartbeat():
-    status_message = f"Consumer is alive at {datetime.now()}"
-    producer.produce('status-topic', value=status_message)
-    producer.flush()
-    print(f"Heartbeat sent: {status_message}")
-
+# Main Consumer Loop
 try:
-    last_heartbeat_time = time.time()
-    heartbeat_interval = 5  # Send heartbeat every 5 seconds
-
     while True:
-        msg = consumer.poll(1.0)
-
-        # Send a heartbeat if the interval has passed
-        current_time = time.time()
-        if current_time - last_heartbeat_time >= heartbeat_interval:
-            send_heartbeat()
-            last_heartbeat_time = current_time
+        msg = consumer_master.poll(1.0)
 
         if msg is None:
             continue
@@ -60,42 +58,40 @@ try:
             print(f"Consumer error: {msg.error()}")
             continue
 
-        # Check if the key is not None before decoding
-        if msg.key() is not None:
-            service_name = msg.key().decode('utf-8')
-        else:
-            service_name = "No Key"  # Handle cases where there is no key
-        
-        message_value = msg.value().decode('utf-8')
-        
-        print(f"Received message from {service_name}: {message_value}")
-
-        # Check if the message contains a valid float sensor value
         try:
-            # Assuming the message format is "Sensor value: XX.XX"
-            if "Sensor value:" in message_value:
-                sensor_value = float(message_value.split(":")[-1].strip())
+            data = json.loads(msg.value().decode('utf-8'))
+        except json.JSONDecodeError:
+            print(f"Malformed message: {msg.value()}")
+            continue
 
-                # Create a point to write to InfluxDB
-                point = Point("sensor_data") \
-                  .tag("source", service_name) \
-                  .field("value", sensor_value) \
-                  .time(datetime.now(pytz.timezone('Europe/London')))
+        bed_number = data.get("bed_number")
+        timestamp = data.get("timestamp")
+        heart_rate = data.get("heart_rate")
 
-                # Write the data to both InfluxDB instances (Master and Standby)
-                write_api_master.write(bucket=bucket, org=org, record=point)
-                print("Data written to Master InfluxDB")
-                
-                write_api_standby.write(bucket=bucket, org=org, record=point)
-                print("Data written to Standby InfluxDB")
-            else:
-                print(f"Message does not contain sensor data: {message_value}")
-        except ValueError as e:
-            print(f"Failed to process message: {message_value}, error: {e}")
+        if not timestamp or not heart_rate:
+            print(f"Invalid data: {data}")
+            continue
+
+        print(f"Received data for Master: Bed {bed_number}, Timestamp {timestamp}, Heart Rate {heart_rate}")
+
+        # Write to InfluxDB Master
+        try:
+            write_api_master.write(bucket=bucket, org=org, record=Point("heart_rate")
+                                   .tag("bed_number", bed_number)
+                                   .field("heart_rate", heart_rate)
+                                   .time(timestamp))
+            print(f"Written to InfluxDB Master: {bed_number}, {heart_rate}")
+        except Exception as e:
+            print(f"Failed to write to InfluxDB Master: {e}")
+
+        # Write to TimescaleDB Master
+        write_to_timescale_master(bed_number, timestamp, heart_rate)
 
 except KeyboardInterrupt:
-    pass
+    print("\nMaster Consumer interrupted.")
 
 finally:
-    # Close down consumer to commit final offsets.
-    consumer.close()
+    consumer_master.close()
+    timescale_cursor_master.close()
+    timescale_conn_master.close()
+    print("Master Consumer and TimescaleDB connection closed.")
