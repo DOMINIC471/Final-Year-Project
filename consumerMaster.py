@@ -37,7 +37,7 @@ baseline_conn = psycopg2.connect(
 baseline_cursor = baseline_conn.cursor()
 
 # VictoriaMetrics Setup
-victoriametrics_url = "http://localhost:8428/api/v1/import"
+victoriametrics_url = "http://localhost:8428/api/v1/import/prometheus"
 
 # Kafka Consumer Setup
 consumer_master = Consumer({
@@ -82,23 +82,25 @@ def write_to_baseline_sql(bed_number, timestamp, heart_rate):
         print(f"❌ Failed to write to baseline SQL: {e}")
 
 # Function to Send Data to VictoriaMetrics
-def write_to_victoriametrics(bed_number, timestamp, heart_rate):
+# Function to Send Data to VictoriaMetrics
+def write_to_victoriametrics(bed_number, iso_timestamp, heart_rate):
     try:
-        data = [
-            {
-                "metric": {
-                    "__name__": "heart_rate",
-                    "bed_number": str(bed_number)
-                },
-                "values": [heart_rate],
-                "timestamps": [int(datetime.fromisoformat(timestamp).timestamp() * 1000)]
-            }
-        ]
-        response = requests.post(victoriametrics_url, json=data)
-        if response.status_code == 200:
-            print(f"✅ Data written to VictoriaMetrics: {bed_number}, {timestamp}, {heart_rate}")
+        # Convert to epoch (seconds with millisecond precision)
+        epoch_ts = datetime.fromisoformat(iso_timestamp).timestamp()
+
+        # Prometheus format: metric{labels} value timestamp
+        line = f'heart_rate{{bed="{bed_number}"}} {heart_rate} {int(epoch_ts)}'
+
+        response = requests.post(
+            "http://localhost:8428/api/v1/import/prometheus",
+            data=line,
+        )
+
+        if response.status_code in [200, 204]:
+            print(f"✅ Data written to VictoriaMetrics: Bed {bed_number}, Heart Rate: {heart_rate}, Timestamp: {iso_timestamp}")
         else:
             print(f"❌ Failed to write to VictoriaMetrics: {response.status_code}, {response.text}")
+
     except Exception as e:
         print(f"❌ Error writing to VictoriaMetrics: {e}")
 
