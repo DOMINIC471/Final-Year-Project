@@ -2,6 +2,7 @@ from confluent_kafka import Producer
 import pandas as pd
 import time
 import json
+from datetime import datetime  # ✅ Added for precise timestamp
 
 # Delivery report callback
 def delivery_report(err, msg):
@@ -12,7 +13,7 @@ def delivery_report(err, msg):
         print(f"Message delivered to {msg.topic()} [{msg.partition()}]")
 
 # Kafka Producer configuration
-p = Producer({'bootstrap.servers': 'localhost:9092'})
+p = Producer({'bootstrap.servers': 'localhost:29092'})
 
 # Path to the cleaned CSV file
 csv_file = "Data/extracted_hr_data.csv"  # Replace with the correct path
@@ -46,7 +47,7 @@ for i in range(0, len(data), batch_size):
         # Prepare the message and ensure proper conversion to native types
         sensor_data = {
             "bed_number": str(row["Bed Number"]),  # Convert to string
-            "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),  # Generate current timestamp
+            "timestamp": datetime.now().isoformat(timespec='milliseconds'),  # ✅ High-precision timestamp
             "heart_rate": int(row["Heart Rate"])  # Convert to native int
         }
 

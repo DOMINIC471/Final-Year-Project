@@ -14,7 +14,7 @@ write_api_standby = client_standby.write_api(write_options=SYNCHRONOUS)
 
 # Kafka Consumer Setup
 consumer_standby = Consumer({
-    'bootstrap.servers': 'localhost:9092',
+    'bootstrap.servers': 'localhost:29092',
     'group.id': 'standby-group',
     'auto.offset.reset': 'earliest'
 })
