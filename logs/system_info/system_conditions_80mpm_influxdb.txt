@@ -1,0 +1,11 @@
+Timestamp: 2025-04-11T00:21:46.341761 UTC
+Platform: macOS-15.3.2-arm64-arm-64bit-Mach-O
+CPU Cores: 10
+CPU Usage: 21.4%
+Memory: 16.00 GB
+Memory Used: 6.66 GB
+Memory Usage: 61.2%
+Battery: 100%
+Plugged in: True
+
+Running Applications (Top 15 by CPU):

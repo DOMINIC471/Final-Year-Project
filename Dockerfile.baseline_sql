@@ -1,0 +1,10 @@
+# Dockerfile.baseline_sql
+FROM postgres:13
+
+# Install `ps`, `pgrep`, and other procps tools
+RUN apt-get update && apt-get install -y procps
+
+# Optional: Set baseline password and DB
+ENV POSTGRES_DB=baseline_sql
+ENV POSTGRES_USER=macbookpro
+ENV POSTGRES_PASSWORD=mybaselinepassword

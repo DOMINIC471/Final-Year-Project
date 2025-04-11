@@ -1,0 +1,40 @@
+version: '2'
+services:
+  zookeeper-1:
+    image: confluentinc/cp-zookeeper:7.3.2
+    container_name: zookeeper-1
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka-1:
+    image: confluentinc/cp-kafka:7.3.2
+    container_name: kafka-1
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper-1:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper-1
+
+  baseline_sql:
+    build:
+      context: .
+      dockerfile: Dockerfile.baseline_sql
+    container_name: baseline_sql
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: baseline_sql
+      POSTGRES_USER: macbookpro
+      POSTGRES_PASSWORD: mybaselinepassword
+    volumes:
+      - baseline_sql_data:/var/lib/postgresql/data
+
+volumes:
+  baseline_sql_data:
