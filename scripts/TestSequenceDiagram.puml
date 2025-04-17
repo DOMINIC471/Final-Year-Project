@@ -1,0 +1,63 @@
+@startuml AutomatedBenchmarkTestFlow
+
+actor "Test Engineer" as Engineer
+
+participant "run_all_tests.py" as TestRunner
+participant "monitor_resources.py" as ResourceMonitor
+participant "producer.py" as Producer
+participant "consumerMaster.py" as Consumer
+participant "Kafka Broker" as Kafka
+participant "Selected TSDB (Active)" as ActiveDB
+database "Logs (.csv)" as Logs
+
+== Test Suite Launch ==
+
+Engineer -> TestRunner : Launch run_all_tests.py
+activate Engineer
+activate TestRunner
+
+loop For Each Database
+    TestRunner -> Kafka : Start Kafka & Zookeeper
+    TestRunner -> ActiveDB : Start current DB container
+
+    loop For Each MPM Rate
+        TestRunner -> ResourceMonitor : Launch monitor_resources.py
+        activate ResourceMonitor
+
+        TestRunner -> Consumer : Start consumerMaster.py (env: ACTIVE_DB)
+        activate Consumer
+
+        TestRunner -> Producer : Start producer.py (env: MESSAGES_PER_MINUTE)
+        activate Producer
+
+        == Streaming Loop ==
+
+        loop For Each Message
+            Producer -> Kafka : Send HR JSON
+            Kafka -> Consumer : Deliver Message
+            Consumer -> ActiveDB : Write Record
+            ActiveDB --> Consumer : ACK
+            Consumer --> Kafka : ACK
+            Consumer -> Logs : Append to write_logs (timestamp, value)
+        end
+
+        ResourceMonitor -> Logs : Append CPU %, Memory
+
+        Producer --> TestRunner : Ends after duration
+        deactivate Producer
+
+        TestRunner -> Consumer : Stop consumerMaster.py
+        deactivate Consumer
+
+        TestRunner -> ResourceMonitor : Stop monitor_resources.py
+        deactivate ResourceMonitor
+    end
+
+    TestRunner -> ActiveDB : Stop DB container
+    TestRunner -> Kafka : Stop Kafka services
+end
+
+deactivate TestRunner
+deactivate Engineer
+
+@enduml

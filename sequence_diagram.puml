@@ -3,47 +3,71 @@
 
 actor User
 
-' User interacts with the Display Program
-User -> "Display Program" : Select Bed Number (e.g., Bed 603)
+participant "Display Program" as DP
+participant "Active TSDB" as ActiveDB
+participant "Standby TSDB" as StandbyDB
+participant "correcterHR.py" as Preprocessor
+participant "producer.py" as Producer
+participant "Kafka Broker" as Kafka
+participant "consumerMaster.py" as ConsumerMaster
+participant "consumerStandBy.py" as ConsumerStandby
 
-' Display Program requests data for the specific Bed from the InfluxDB (Master)
-"Display Program" -> "InfluxDB (Master)" : Request Data for Bed 603
-"InfluxDB (Master)" -> "Display Program" : Return Real-Time Data for Bed 603
+== Real-Time Visualization ==
 
-' In case of failure, Display Program requests data from the InfluxDB (Standby)
-alt Master Failure
-    "Display Program" -> "InfluxDB (Standby)" : Request Data for Bed 603
-    "InfluxDB (Standby)" -> "Display Program" : Return Real-Time Data for Bed 603
+User -> DP : Select Bed Number (e.g., Bed 603)
+activate User
+activate DP
+DP -> ActiveDB : Query Real-Time Data for Bed 603
+activate ActiveDB
+ActiveDB --> DP : Return Data : ACK
+deactivate ActiveDB
+
+alt Master TSDB Fails
+    DP -> StandbyDB : Fallback Query for Bed 603
+    activate StandbyDB
+    StandbyDB --> DP : Fallback Data : ACK
+    deactivate StandbyDB
 end
 
-' Display Program plots the real-time data for the User
-"Display Program" -> User : Plot Real-Time Heart Rate Graph
+DP -> User : Plot Real-Time Heart Rate Graph
+deactivate DP
 
-' Kafka Bus forwards the request to the Producer
-"Kafka Bus" -> "Producer" : Forward Request
+== Historical Data Fetch (Optional) ==
+User -> DP : Request Historical Data for Bed 603
+activate DP
+DP -> ActiveDB : Query 24h Historical Data
+activate ActiveDB
+ActiveDB --> DP : Return Data : ACK
+deactivate ActiveDB
+DP -> User : Plot Historical Graph
+deactivate DP
+deactivate User
 
-' Producer fetches data from HR.csv or Database
-"Producer" -> "HR.csv / Database" : Fetch 10-20 Records
-"HR.csv / Database" -> "Producer" : Return Records
+== Background: Data Pipeline ==
 
-' Producer publishes the fetched data to Kafka
-"Producer" -> "Kafka Bus" : Publish Records
+Preprocessor -> Preprocessor : Extract Data (correcterHR.py)
+activate Preprocessor
+Preprocessor --> Producer : Output CSV (extracted_hr_data.csv)
+deactivate Preprocessor
 
-' Kafka Bus forwards records to both ConsumerMaster and ConsumerStandBy
-"Kafka Bus" -> "ConsumerMaster" : Deliver Records
-"Kafka Bus" -> "ConsumerStandBy" : Deliver Records
+Producer -> Kafka : Stream JSON Records
+activate Producer
+Kafka --> Producer : ACK
+deactivate Producer
 
-' ConsumerMaster writes data to both TimescaleDB and InfluxDB
-"ConsumerMaster" -> "TimescaleDB (Master)" : Write Data
-"ConsumerMaster" -> "InfluxDB (Master)" : Write Data
+Kafka -> ConsumerMaster : Deliver Message
+Kafka -> ConsumerStandby : Mirror Message
 
-' ConsumerStandBy writes data to InfluxDB Standby
-"ConsumerStandBy" -> "InfluxDB (Standby)" : Write Data
+activate ConsumerMaster
+ConsumerMaster -> ActiveDB : Write Heart Rate Data
+ActiveDB --> ConsumerMaster : ACK
+ConsumerMaster --> Kafka : ACK
+deactivate ConsumerMaster
 
-' InfluxDB UI allows viewing historical data
-User -> "InfluxDB UI" : Query Historical Data
-"InfluxDB UI" -> "InfluxDB (Master)" : Fetch Historical Records
-"InfluxDB (Master)" -> "InfluxDB UI" : Return Historical Data
+activate ConsumerStandby
+ConsumerStandby -> StandbyDB : Write Backup Data
+StandbyDB --> ConsumerStandby : ACK
+ConsumerStandby --> Kafka : ACK
+deactivate ConsumerStandby
 
 @enduml
-
