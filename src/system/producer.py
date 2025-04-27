@@ -83,52 +83,59 @@ def delivery_report(err, msg):
         print(f"✅ Delivered to {msg.topic()} [{msg.partition()}] @ offset {msg.offset()}")
 
 # -------------------------------------
-# STREAMING LOOP
+# MAIN PRODUCER LOOP
 # -------------------------------------
-print(f"\n🚀 Kafka Producer Started at {MESSAGES_PER_MINUTE} mpm (~{INTERVAL:.2f}s interval)\n")
+def main():
+    print(f"\n🚀 Kafka Producer Started at {MESSAGES_PER_MINUTE} mpm (~{INTERVAL:.2f}s interval)\n")
 
-start_time = time.time()
-index = 0
-total_rows = len(data)
+    start_time = time.time()
+    index = 0
+    total_rows = len(data)
 
-try:
-    while True:
-        if IS_TEST_MODE and (time.time() - start_time >= TEST_DURATION):
-            print("\n🛑 Test duration complete. Exiting producer loop.")
-            break
-
-        row = data.iloc[index]
-        timestamp = datetime.now(timezone.utc).isoformat(timespec='milliseconds')
-        message = {
-            "bed_number": str(row["Bed Number"]),
-            "timestamp": timestamp,
-            "heart_rate": int(row["Heart Rate"])
-        }
-
-        try:
-            p.produce(
-                TOPIC,
-                key=message["bed_number"],
-                value=json.dumps(message),
-                callback=delivery_report
-            )
-            log_usage()
-        except Exception as e:
-            print(f"❌ Kafka produce error: {e}")
-            p.flush()
-
-        p.poll(0)
-        time.sleep(INTERVAL)
-        index = (index + 1) % total_rows
-
-finally:
     try:
-        flush_result = p.flush()
-        print(f"\n✅ Kafka flush complete: {flush_result}")
-    except Exception as e:
-        print(f"⚠️ Error during final flush: {e}")
+        while True:
+            if IS_TEST_MODE and (time.time() - start_time >= TEST_DURATION):
+                print("\n🛑 Test duration complete. Exiting producer loop.")
+                break
 
-    if IS_TEST_MODE:
-        print(f"✅ Producer shutdown complete. Resource logs saved to: {LOG_FILE}")
-    else:
-        print("✅ Producer shutdown complete.")
+            row = data.iloc[index]
+            timestamp = datetime.now(timezone.utc).isoformat(timespec='milliseconds')
+            message = {
+                "bed_number": str(row["Bed Number"]),
+                "timestamp": timestamp,
+                "heart_rate": int(row["Heart Rate"])
+            }
+
+            try:
+                p.produce(
+                    TOPIC,
+                    key=message["bed_number"],
+                    value=json.dumps(message),
+                    callback=delivery_report
+                )
+                log_usage()
+            except Exception as e:
+                print(f"❌ Kafka produce error: {e}")
+                p.flush()
+
+            p.poll(0)
+            time.sleep(INTERVAL)
+            index = (index + 1) % total_rows
+
+    finally:
+        try:
+            flush_result = p.flush()
+            print(f"\n✅ Kafka flush complete: {flush_result}")
+        except Exception as e:
+            print(f"⚠️ Error during final flush: {e}")
+
+        if IS_TEST_MODE:
+            print(f"✅ Producer shutdown complete. Resource logs saved to: {LOG_FILE}")
+        else:
+            print("✅ Producer shutdown complete.")
+
+# -------------------------------------
+# PROTECT ENTRYPOINT
+# -------------------------------------
+if __name__ == "__main__":
+    main()

@@ -78,9 +78,6 @@ def write_to_all_influx(bed, ts, hr):
             kafka_messages_failed.inc()
             print(f"❌ {target} write error: {e}")
 
-# -----------------------------------
-# Heartbeat emitter for standby1
-# -----------------------------------
 def heartbeat_emitter():
     producer = Producer({"bootstrap.servers": broker})
     while True:
@@ -98,109 +95,110 @@ def heartbeat_emitter():
         time.sleep(2)
 
 # -----------------------------------
-# Main consumer logic
+# MAIN LOGIC (protected)
 # -----------------------------------
-consumer = Consumer({
-    "bootstrap.servers": broker,
-    "group.id": f"{consumer_role}-heartbeat-group-{uuid.uuid4()}",
-    "auto.offset.reset": "latest"
-})
-consumer.subscribe(["heartbeat"])
-print(f"🚑 Subscribed to heartbeat")
+if __name__ == "__main__":
 
-print("⏳ Monitoring master heartbeat...")
-last_master_heartbeat = None
-startup_time = datetime.now(timezone.utc)
+    # --- Monitor master heartbeat
+    consumer = Consumer({
+        "bootstrap.servers": broker,
+        "group.id": f"{consumer_role}-heartbeat-group-{uuid.uuid4()}",
+        "auto.offset.reset": "latest"
+    })
+    consumer.subscribe(["heartbeat"])
+    print(f"🚑 Subscribed to heartbeat")
 
-GRACE_PERIOD = 8
-MAX_HEARTBEAT_LAG = 15
-HEARTBEAT_WAIT_TIME = 10
+    print("⏳ Monitoring master heartbeat...")
+    last_master_heartbeat = None
+    startup_time = datetime.now(timezone.utc)
 
-try:
-    while True:
-        msg = consumer.poll(1.0)
-        now = datetime.now(timezone.utc)
-        time_since_start = (now - startup_time).total_seconds()
+    GRACE_PERIOD = 8
+    MAX_HEARTBEAT_LAG = 15
+    HEARTBEAT_WAIT_TIME = 10
 
-        if msg and not msg.error():
-            payload = json.loads(msg.value())
-            if payload.get("consumer_id") == "master":
-                last_master_heartbeat = now
-                print(f"💓 Master heartbeat @ {now.isoformat()}")
+    try:
+        while True:
+            msg = consumer.poll(1.0)
+            now = datetime.now(timezone.utc)
+            time_since_start = (now - startup_time).total_seconds()
 
-        if time_since_start > HEARTBEAT_WAIT_TIME and last_master_heartbeat is None:
-            print("❌ No heartbeat received during startup. Promoting...")
-            break
-
-        if last_master_heartbeat and time_since_start > GRACE_PERIOD:
-            lag = (now - last_master_heartbeat).total_seconds()
-            if lag > MAX_HEARTBEAT_LAG:
-                print("✅ Master heartbeat lag detected. Promoting...")
-                break
-
-except KeyboardInterrupt:
-    print("🛑 Standby1 interrupted during monitoring.")
-finally:
-    consumer.close()
-
-# -----------------------------------
-# After Promotion
-# -----------------------------------
-promotion_lock.write_text("standby1")
-own_heartbeat_file.touch()
-
-print("🚨 FAILOVER: Standby1 assuming master consumer duties!")
-heartbeat_thread = threading.Thread(target=heartbeat_emitter, daemon=True)
-heartbeat_thread.start()
-
-consumer = Consumer({
-    "bootstrap.servers": broker,
-    "group.id": f"standby1-heart_rate-group-{uuid.uuid4()}",
-    "auto.offset.reset": "latest"
-})
-consumer.subscribe(["heart_rate"])
-print("🚑 Subscribed to 'heart_rate' topic after promotion.")
-
-try:
-    while True:
-        msg = consumer.poll(1.0)
-        now = datetime.now(timezone.utc)
-
-        if msg and not msg.error():
-            try:
+            if msg and not msg.error():
                 payload = json.loads(msg.value())
-                bed = payload["bed_number"]
-                hr = payload["heart_rate"]
-                ts = datetime.fromisoformat(payload["timestamp"]).astimezone(timezone.utc).isoformat(timespec="milliseconds")
+                if payload.get("consumer_id") == "master":
+                    last_master_heartbeat = now
+                    print(f"💓 Master heartbeat @ {now.isoformat()}")
 
-                kafka_messages_received.inc()
-                kafka_consumer_lag.set(0)
-                write_to_all_influx(bed, ts, hr)
-                kafka_messages_processed.inc()
-            except Exception as e:
-                print(f"⚠️ Invalid message: {e}")
-                kafka_messages_failed.inc()
-
-        # Detect if master has recovered
-        heartbeat_msg = consumer.poll(0)
-        if heartbeat_msg and not heartbeat_msg.error():
-            payload = json.loads(heartbeat_msg.value())
-            if payload.get("consumer_id") == "master":
-                print("🎉 Master has recovered! Demoting standby1...")
+            if time_since_start > HEARTBEAT_WAIT_TIME and last_master_heartbeat is None:
+                print("❌ No heartbeat received during startup. Promoting...")
                 break
 
-except KeyboardInterrupt:
-    print("🛑 Standby1 interrupted during failover mode.")
-finally:
-    consumer.close()
-    heartbeat_thread.join(timeout=1)
-    if own_heartbeat_file.exists():
-        own_heartbeat_file.unlink()
-    if promotion_lock.exists():
-        try:
-            if promotion_lock.read_text().strip() == "standby1":
-                promotion_lock.unlink()
-                print("🧹 Cleaned up promotion lock after demotion.")
-        except Exception as e:
-            print(f"⚠️ Failed to clean promotion lock: {e}")
-    print("✅ Standby1 shutdown complete.")
+            if last_master_heartbeat and time_since_start > GRACE_PERIOD:
+                lag = (now - last_master_heartbeat).total_seconds()
+                if lag > MAX_HEARTBEAT_LAG:
+                    print("✅ Master heartbeat lag detected. Promoting...")
+                    break
+
+    except KeyboardInterrupt:
+        print("🛑 Standby1 interrupted during monitoring.")
+    finally:
+        consumer.close()
+
+    # --- After promotion
+    promotion_lock.write_text("standby1")
+    own_heartbeat_file.touch()
+
+    print("🚨 FAILOVER: Standby1 assuming master consumer duties!")
+    heartbeat_thread = threading.Thread(target=heartbeat_emitter, daemon=True)
+    heartbeat_thread.start()
+
+    consumer = Consumer({
+        "bootstrap.servers": broker,
+        "group.id": f"standby1-heart_rate-group-{uuid.uuid4()}",
+        "auto.offset.reset": "latest"
+    })
+    consumer.subscribe(["heart_rate"])
+    print("🚑 Subscribed to 'heart_rate' topic after promotion.")
+
+    try:
+        while True:
+            msg = consumer.poll(1.0)
+            now = datetime.now(timezone.utc)
+
+            if msg and not msg.error():
+                try:
+                    payload = json.loads(msg.value())
+                    bed = payload["bed_number"]
+                    hr = payload["heart_rate"]
+                    ts = datetime.fromisoformat(payload["timestamp"]).astimezone(timezone.utc).isoformat(timespec="milliseconds")
+
+                    kafka_messages_received.inc()
+                    kafka_consumer_lag.set(0)
+                    write_to_all_influx(bed, ts, hr)
+                    kafka_messages_processed.inc()
+                except Exception as e:
+                    print(f"⚠️ Invalid message: {e}")
+                    kafka_messages_failed.inc()
+
+            # Detect master recovery
+            heartbeat_msg = consumer.poll(0)
+            if heartbeat_msg and not heartbeat_msg.error():
+                payload = json.loads(heartbeat_msg.value())
+                if payload.get("consumer_id") == "master":
+                    print("🎉 Master has recovered! Demoting standby1...")
+                    break
+
+    except KeyboardInterrupt:
+        print("🛑 Standby1 interrupted during failover mode.")
+    finally:
+        consumer.close()
+        heartbeat_thread.join(timeout=1)
+        if own_heartbeat_file.exists():
+            own_heartbeat_file.unlink()
+        if promotion_lock.exists():
+            try:
+                if promotion_lock.read_text().strip() == "standby1":
+                    promotion_lock.unlink()
+                    print("🧹 Cleaned up promotion lock after demotion.")
+            except Exception as e:
+                print(f"⚠️ Failed to clean promotion lock: {e}")
+        print("✅ Standby1 shutdown complete.")

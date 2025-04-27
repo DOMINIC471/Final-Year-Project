@@ -1,0 +1,152 @@
+@startuml RealTimeHeartRateSystem_Final
+
+actor User
+
+participant "Display Program" as DP
+participant "Active InfluxDB" as ActiveDB
+participant "Standby1 InfluxDB" as Standby1DB
+participant "Standby2 InfluxDB" as Standby2DB
+participant "Producer" as Producer
+participant "Kafka Broker" as Kafka
+participant "consumerMaster.py" as MasterConsumer
+participant "consumerStandby1.py" as Standby1Consumer
+participant "consumerStandby2.py" as Standby2Consumer
+participant "Heartbeat Emitter" as HeartbeatEmitter
+
+== Real-Time Visualization ==
+
+User -> DP : Select Bed Number (e.g., Bed 603)
+activate User
+activate DP
+DP -> ActiveDB : Query Real-Time Data
+activate ActiveDB
+ActiveDB --> DP : Return Data
+deactivate ActiveDB
+
+alt ActiveDB Unavailable
+    DP -> Standby1DB : Fallback Query
+    activate Standby1DB
+    Standby1DB --> DP : Return Data
+    deactivate Standby1DB
+
+    alt Standby1DB Also Unavailable
+        DP -> Standby2DB : Final Fallback Query
+        activate Standby2DB
+        Standby2DB --> DP : Return Data
+        deactivate Standby2DB
+    end
+end
+
+DP -> User : Plot Real-Time Graph
+deactivate DP
+
+== Historical Data Fetch (Optional) ==
+
+User -> DP : Request Historical Data (e.g., 24h)
+activate DP
+DP -> ActiveDB : Query Historical Data
+activate ActiveDB
+ActiveDB --> DP : Return Data
+deactivate ActiveDB
+
+alt ActiveDB Unavailable
+    DP -> Standby1DB : Fallback Historical Query
+    activate Standby1DB
+    Standby1DB --> DP : Return Data
+    deactivate Standby1DB
+
+    alt Standby1DB Also Unavailable
+        DP -> Standby2DB : Final Fallback Historical Query
+        activate Standby2DB
+        Standby2DB --> DP : Return Data
+        deactivate Standby2DB
+    end
+end
+
+DP -> User : Plot Historical Graph
+deactivate DP
+deactivate User
+
+== Background: Data Pipeline ==
+
+Producer -> Kafka : Stream Heart Rate JSON
+activate Producer
+Kafka --> Producer : ACK
+deactivate Producer
+
+Kafka -> MasterConsumer : Deliver Message
+Kafka -> Standby1Consumer : Deliver Message
+Kafka -> Standby2Consumer : Deliver Message
+
+activate MasterConsumer
+MasterConsumer -> ActiveDB : Write Heart Rate Data
+MasterConsumer -> Standby1DB : Mirror Write
+MasterConsumer -> Standby2DB : Mirror Write
+ActiveDB --> MasterConsumer : ACK
+Standby1DB --> MasterConsumer : ACK
+Standby2DB --> MasterConsumer : ACK
+MasterConsumer --> Kafka : ACK
+deactivate MasterConsumer
+
+activate Standby1Consumer
+Standby1Consumer -> ActiveDB : Write (if Promoted)
+Standby1Consumer -> Standby1DB : Write (if Promoted)
+Standby1Consumer -> Standby2DB : Write (if Promoted)
+deactivate Standby1Consumer
+
+activate Standby2Consumer
+Standby2Consumer -> ActiveDB : Write (if Promoted)
+Standby2Consumer -> Standby1DB : Write (if Promoted)
+Standby2Consumer -> Standby2DB : Write (if Promoted)
+deactivate Standby2Consumer
+
+== Background: Heartbeat Monitoring and Failover ==
+
+HeartbeatEmitter -> Kafka : Publish Master Heartbeats
+MasterConsumer -> Kafka : Consume Heartbeats
+Standby1Consumer -> Kafka : Monitor Heartbeats
+Standby2Consumer -> Kafka : Monitor Heartbeats
+
+alt Master Heartbeat Alive
+    Standby1Consumer -> Standby1Consumer : Stay Passive
+    Standby2Consumer -> Standby2Consumer : Stay Passive
+else Master Heartbeat Missing (Timeout)
+    Standby1Consumer -> Kafka : Promote to Active
+    Standby1Consumer -> Standby1Consumer : Write Promotion Lock
+    Standby1Consumer -> Kafka : Start Writing to All InfluxDBs
+end
+
+note right of Standby1Consumer
+Writes to:
+- ActiveDB
+- Standby1DB
+- Standby2DB
+end note
+
+alt Standby1 Failure or No Lock
+    Standby2Consumer -> Kafka : Promote to Active
+    Standby2Consumer -> Standby2Consumer : Write Promotion Lock
+    Standby2Consumer -> Kafka : Start Writing to All InfluxDBs
+end
+
+note right of Standby2Consumer
+Writes to:
+- ActiveDB
+- Standby1DB
+- Standby2DB
+end note
+
+== Master Recovery ==
+
+MasterConsumer -> Kafka : Emit Heartbeats Again
+Standby1Consumer -> Kafka : Detect Regular Master Heartbeats
+Standby2Consumer -> Kafka : Detect Regular Master Heartbeats
+
+alt Master Heartbeats Detected (Recovery)
+    Standby1Consumer -> Standby1Consumer : Voluntarily Demote
+    Standby2Consumer -> Standby2Consumer : Voluntarily Demote
+    Standby1Consumer -> Standby1Consumer : Delete Promotion Lock (if any)
+    Standby2Consumer -> Standby2Consumer : Delete Promotion Lock (if any)
+end
+
+@enduml
