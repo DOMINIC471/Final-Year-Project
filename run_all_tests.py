@@ -1,86 +1,92 @@
 import os
 import time
 import subprocess
-from scripts.system_utils import record_system_conditions
+from dotenv import load_dotenv
+from src.tests.system_utils import record_system_conditions
 
 # -------------------------------------
-# CONFIGURATION
+# LOAD ENVIRONMENT VARIABLES
 # -------------------------------------
-TEST_TIERS = [10, 20, 40, 60, 80, 100, 200, 500, 1000]
+load_dotenv()
+
+# Runtime configuration from .env or default fallback
+DEFAULT_TIERS = [10, 20, 40, 60, 80, 100, 200, 500, 1000]
+MESSAGES_PER_MINUTE = int(os.getenv("MESSAGES_PER_MINUTE", 20))
+TEST_TIERS = DEFAULT_TIERS
+TEST_DURATION = int(os.getenv("TEST_DURATION", 300))
+
+# Kafka configuration
+KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:29092")
+
+# Supported databases
 DATABASES = {
-    "baseline": {
-        "container": "baseline_sql",
-        "process": "postgres"
-    },
-    "influxdb": {
-        "container": "influxdb-master",
-        "process": "influxd"
-    },
-    "timescaledb": {
-        "container": "timescaledb",
-        "process": "postgres"
-    },
-    "victoriametrics": {
-        "container": "victoria-metrics",
-        "process": "victoria-metrics"
-    }
+    "baseline_sql": {"type": "baseline", "process": "postgres", "prom_port": 8000},
+    "influxdb-master": {"type": "influxdb", "process": "influxd", "prom_port": 8000},
+    "timescaledb": {"type": "timescaledb", "process": "postgres", "prom_port": 8000},
+    "victoria-metrics": {"type": "victoriametrics", "process": "victoria-metrics", "prom_port": 8000},
 }
-TEST_DURATION = 300
+
 processes = []
 
 # -------------------------------------
 def stop_all_containers_except(active_container):
-    for db_name, db_info in DATABASES.items():
-        container = db_info["container"]
+    for container in DATABASES:
         if container != active_container:
-            os.system(f"docker stop {container} > /dev/null 2>&1")
+            subprocess.run(["docker-compose", "stop", container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # -------------------------------------
-def run_test_for_db_and_rate(db, rate):
+def kill_port(port):
+    subprocess.run(f"lsof -ti :{port} | xargs kill -9", shell=True)
+
+# -------------------------------------
+def run_test_for_db_and_rate(active_container, rate):
+    db_type = DATABASES[active_container]["type"]
+    prom_port = DATABASES[active_container]["prom_port"]
     rate_label = f"{rate}mpm"
-    print(f"\n🧪 Starting test: DB = {db}, Rate = {rate_label}")
+    print(f"\n🧪 Starting test: DB = {db_type}, Rate = {rate_label}")
 
-    container_name = DATABASES[db]["container"]
+    stop_all_containers_except(active_container)
 
-    # Stop other containers
-    stop_all_containers_except(container_name)
+    # Kill lingering processes + free Prometheus port
+    for script in ["consumerMaster.py", "producer.py", "monitor_resources.py"]:
+        subprocess.run(f"pkill -f {script}", shell=True)
+    kill_port(prom_port)
 
-    # Clean up any old processes
-    os.system("pkill -f consumerMaster.py")
-    os.system("pkill -f producer.py")
-    os.system("pkill -f monitor_resources.py")
-    os.system("lsof -ti :8000 | xargs kill -9 2>/dev/null")
+    print("🐳 Starting containers: Zookeeper, Kafka, DB...")
+    subprocess.run(["docker-compose", "start", "zookeeper-1", "kafka-1", active_container])
+    time.sleep(5)
 
-    # Start containers
-    os.system("docker start zookeeper-1 kafka-1")
-    os.system(f"docker start {container_name}")
-    time.sleep(3)
-
-    # Record system info to system_info/
-    syslog_path = f"logs/system_info/system_conditions_{rate_label}_{db}.txt"
+    syslog_path = f"test_results/system_info/system_conditions_{rate_label}_{db_type}.txt"
     os.makedirs(os.path.dirname(syslog_path), exist_ok=True)
     record_system_conditions(syslog_path)
 
-    # Start global monitor
     print("📊 Launching monitor_resources.py...")
-    monitor = subprocess.Popen(["python3", "monitor_resources.py", db, rate_label])
+    monitor = subprocess.Popen(["python3", "src/tests/monitor_resources.py", db_type, rate_label])
     processes.append(monitor)
 
-    # Launch consumer
     print("🎧 Launching consumerMaster.py...")
     consumer_env = os.environ.copy()
-    consumer_env["MESSAGES_PER_MINUTE"] = str(rate)
-    consumer_env["ACTIVE_DB"] = db
-    consumer = subprocess.Popen(["python3", "consumerMaster.py"], env=consumer_env)
+    consumer_env.update({
+        "MESSAGES_PER_MINUTE": str(rate),
+        "ACTIVE_DB": active_container,
+        "IS_TEST_MODE": "1",
+        "PROM_PORT": str(prom_port),
+        "KAFKA_BROKER": KAFKA_BROKER
+    })
+    consumer = subprocess.Popen(["python3", "src/system/consumerMaster.py"], env=consumer_env)
     processes.append(consumer)
+
     time.sleep(2)
 
-    # Launch producer (blocking)
     print("🚀 Launching producer.py...")
     producer_env = os.environ.copy()
-    producer_env["MESSAGES_PER_MINUTE"] = str(rate)
-    producer_env["ACTIVE_DB"] = db
-    subprocess.run(["python3", "producer.py"], env=producer_env)
+    producer_env.update({
+        "MESSAGES_PER_MINUTE": str(rate),
+        "ACTIVE_DB": db_type,
+        "IS_TEST_MODE": "1",
+        "KAFKA_BROKER": KAFKA_BROKER
+    })
+    subprocess.run(["python3", "src/system/producer.py"], env=producer_env)
 
     print(f"⏳ Waiting for test duration ({TEST_DURATION}s)...")
     time.sleep(TEST_DURATION + 5)
@@ -90,21 +96,27 @@ def cleanup_all_processes():
     print("\n🧼 Cleaning up background processes...")
     for p in processes:
         p.terminate()
-    os.system("pkill -f consumerMaster.py")
-    os.system("pkill -f producer.py")
-    os.system("pkill -f monitor_resources.py")
-    os.system("lsof -ti :8000 | xargs kill -9 2>/dev/null")
-    print("✅ All test-related processes stopped.\n")
+
+    for script in ["consumerMaster.py", "producer.py", "monitor_resources.py"]:
+        subprocess.run(f"pkill -f {script}", shell=True)
+
+    for db_info in DATABASES.values():
+        kill_port(db_info["prom_port"])
+
+    print("🛑 Stopping all Docker containers...")
+    subprocess.run(["docker-compose", "stop"])
+
+    print("✅ All test-related processes and containers stopped.\n")
 
 # -------------------------------------
 def main():
     print("📦 RUNNING FULL AUTOMATED TEST SUITE FOR ALL DATABASES")
     try:
-        for db in DATABASES:
+        for container in DATABASES:
             for rate in TEST_TIERS:
-                run_test_for_db_and_rate(db, rate)
+                run_test_for_db_and_rate(container, rate)
     except KeyboardInterrupt:
-        print("\n🛑 KeyboardInterrupt detected!")
+        print("\n🛑 Test interrupted manually.")
     finally:
         cleanup_all_processes()
         print("🧹 Final cleanup complete.")

@@ -1,0 +1,183 @@
+version: '2'
+services:
+  # Kafka + Zookeeper
+  zookeeper-1:
+    image: confluentinc/cp-zookeeper:7.3.2
+    container_name: zookeeper-1
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka-1:
+    image: confluentinc/cp-kafka:7.3.2
+    container_name: kafka-1
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper-1:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper-1
+
+  # Baseline SQL
+  baseline_sql:
+    build:
+      context: .
+      dockerfile: Dockerfile.baseline_sql
+    container_name: baseline_sql
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: baseline_sql
+      POSTGRES_USER: macbookpro
+      POSTGRES_PASSWORD: mybaselinepassword
+    volumes:
+      - baseline_sql_data:/var/lib/postgresql/data
+
+  baseline-standby1:
+    build:
+      context: .
+      dockerfile: Dockerfile.baseline_sql
+    container_name: baseline-standby1
+    ports:
+      - "5436:5432"
+    environment:
+      POSTGRES_DB: baseline_sql
+      POSTGRES_USER: macbookpro
+      POSTGRES_PASSWORD: mybaselinepassword
+    volumes:
+      - baseline_standby1_data:/var/lib/postgresql/data
+
+  baseline-standby2:
+    build:
+      context: .
+      dockerfile: Dockerfile.baseline_sql
+    container_name: baseline-standby2
+    ports:
+      - "5437:5432"
+    environment:
+      POSTGRES_DB: baseline_sql
+      POSTGRES_USER: macbookpro
+      POSTGRES_PASSWORD: mybaselinepassword
+    volumes:
+      - baseline_standby2_data:/var/lib/postgresql/data
+
+  # InfluxDB
+  influxdb-master:
+    image: influxdb:2.7
+    container_name: influxdb-master
+    ports:
+      - "8086:8086"
+    environment:
+      - INFLUXDB_ORG=FYP
+      - INFLUXDB_BUCKET=sensor_data
+      - INFLUXDB_TOKEN=your-master-token
+    volumes:
+      - influxdb_master_data:/var/lib/influxdb2
+
+  influxdb-standby1:
+    image: influxdb:2.7
+    container_name: influxdb-standby1
+    ports:
+      - "8087:8086"
+    environment:
+      - INFLUXDB_ORG=FYP
+      - INFLUXDB_BUCKET=sensor_data
+      - INFLUXDB_TOKEN=your-standby1-token
+    volumes:
+      - influxdb_standby1_data:/var/lib/influxdb2
+
+  influxdb-standby2:
+    image: influxdb:2.7
+    container_name: influxdb-standby2
+    ports:
+      - "8088:8086"
+    environment:
+      - INFLUXDB_ORG=FYP
+      - INFLUXDB_BUCKET=sensor_data
+      - INFLUXDB_TOKEN=your-standby2-token
+    volumes:
+      - influxdb_standby2_data:/var/lib/influxdb2
+
+  # TimescaleDB
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    container_name: timescaledb
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=mynewpassword
+      - POSTGRES_DB=sensor_data
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+
+  timescaledb-standby1:
+    image: timescale/timescaledb:latest-pg14
+    container_name: timescaledb-standby1
+    ports:
+      - "5434:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=mynewpassword
+      - POSTGRES_DB=sensor_data
+    volumes:
+      - timescaledb_standby1_data:/var/lib/postgresql/data
+
+  timescaledb-standby2:
+    image: timescale/timescaledb:latest-pg14
+    container_name: timescaledb-standby2
+    ports:
+      - "5435:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=mynewpassword
+      - POSTGRES_DB=sensor_data
+    volumes:
+      - timescaledb_standby2_data:/var/lib/postgresql/data
+
+  # VictoriaMetrics
+  victoria-metrics:
+    image: victoriametrics/victoria-metrics
+    container_name: victoria-metrics
+    ports:
+      - "8428:8428"
+    volumes:
+      - victoriametrics_data:/storage
+
+  victoria-metrics-standby1:
+    image: victoriametrics/victoria-metrics
+    container_name: victoria-metrics-standby1
+    ports:
+      - "8429:8428"
+    volumes:
+      - victoriametrics_standby1_data:/storage
+
+  victoria-metrics-standby2:
+    image: victoriametrics/victoria-metrics
+    container_name: victoria-metrics-standby2
+    ports:
+      - "8430:8428"
+    volumes:
+      - victoriametrics_standby2_data:/storage
+
+volumes:
+  baseline_sql_data:
+  baseline_standby1_data:
+  baseline_standby2_data:
+
+  influxdb_master_data:
+  influxdb_standby1_data:
+  influxdb_standby2_data:
+
+  timescaledb_data:
+  timescaledb_standby1_data:
+  timescaledb_standby2_data:
+
+  victoriametrics_data:
+  victoriametrics_standby1_data:
+  victoriametrics_standby2_data:
