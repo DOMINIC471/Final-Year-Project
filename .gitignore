@@ -1,10 +1,6 @@
 venv/
 __pycache__/
 *.pyc
-.env
+*.DS_Store
 logs/
 # Don't commit this stuff
-venv/
-.env
-__pycache__/
-*.DS_Store
